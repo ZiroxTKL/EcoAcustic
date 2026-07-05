@@ -11,13 +11,6 @@ python src\phase2_clustering.py
 python src\phase3_classification.py
 python src\phase4_thresholds.py
 ```
-
-Para guardar modelos entrenados de la Fase 3, ejecutar:
-
-```powershell
-python src\phase3_classification.py --save-models
-```
-
 ## Salidas principales
 
 - `outputs/phase1`: reduccion de dimensionalidad, metricas y figuras.
