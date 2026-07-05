@@ -17,4 +17,3 @@ python src\phase4_thresholds.py
 - `outputs/phase2`: clustering DBSCAN/GMM y Silhouette.
 - `outputs/phase3`: MLP TensorFlow, ensamble, F1-score y matrices.
 - `outputs/phase4`: zonas de confianza, incertidumbre y rechazo.
-- `report/main.tex`: informe integrado en LaTeX.
