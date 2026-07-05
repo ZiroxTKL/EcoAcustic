@@ -1,0 +1,5 @@
+block,operation,units,activation,regularization
+Entrada,MFCC estandarizados,64,N/A,StandardScaler
+Oculta 1,Dense + BatchNorm + ReLU + Dropout,128,ReLU,"L2=1e-4, Dropout=0.30"
+Oculta 2,Dense + BatchNorm + ReLU + Dropout,64,ReLU,"L2=1e-4, Dropout=0.20"
+Salida,Dense + Softmax,5,Softmax,N/A

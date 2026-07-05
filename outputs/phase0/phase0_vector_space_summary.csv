@@ -1,0 +1,3 @@
+split,observations,features,vector_space,target,classes,metadata
+train,1906,64,R^64,species_id,"10, 12, 17, 18, 23","recording_id, songtype_id, is_tp"
+test,477,64,R^64,species_id,"10, 12, 17, 18, 23","recording_id, songtype_id, is_tp"

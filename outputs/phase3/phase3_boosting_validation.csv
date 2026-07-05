@@ -1,0 +1,2 @@
+model,paradigm,val_f1_weighted,val_f1_macro,elapsed_seconds
+XGBoost,gradient_boosted_decision_trees,0.39762240104621593,0.3564055126282742,5.146066099987365

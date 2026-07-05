@@ -1,5 +1,3 @@
-"""Phase 2: clustering with DBSCAN and Gaussian Mixture Models."""
-
 from __future__ import annotations
 
 import argparse
@@ -38,7 +36,6 @@ class ClusteringSelection:
 
 
 def pca_representation(X_scaled: np.ndarray, threshold: float) -> tuple[np.ndarray, PCA, int]:
-    """Fit PCA and keep enough components to reach the variance threshold."""
     pca_full = PCA().fit(X_scaled)
     cumulative = np.cumsum(pca_full.explained_variance_ratio_)
     n_components = int(np.argmax(cumulative >= threshold) + 1)
@@ -48,7 +45,6 @@ def pca_representation(X_scaled: np.ndarray, threshold: float) -> tuple[np.ndarr
 
 
 def valid_silhouette(X: np.ndarray, labels: np.ndarray, ignore_noise: bool) -> float:
-    """Compute Silhouette if the label partition is valid."""
     if ignore_noise:
         mask = labels != -1
         X = X[mask]
@@ -65,7 +61,6 @@ def internal_scores(
     labels: np.ndarray,
     ignore_noise: bool,
 ) -> tuple[float, float]:
-    """Compute Davies-Bouldin and Calinski-Harabasz when valid."""
     if ignore_noise:
         mask = labels != -1
         X = X[mask]
@@ -84,7 +79,6 @@ def evaluate_gmm_grid(
     k_max: int,
     random_state: int,
 ) -> tuple[pd.DataFrame, np.ndarray, ClusteringSelection]:
-    """Evaluate GMM models and select k by maximum Silhouette."""
     rows = []
     best = None
     best_labels = None
@@ -138,7 +132,6 @@ def evaluate_gmm_grid(
 
 
 def dbscan_eps_grid(Z: np.ndarray, min_samples: int, n_values: int) -> np.ndarray:
-    """Build an eps grid from k-nearest-neighbor distances."""
     neighbors = NearestNeighbors(n_neighbors=min_samples)
     neighbors.fit(Z)
     distances, _ = neighbors.kneighbors(Z)
@@ -153,7 +146,6 @@ def evaluate_dbscan_grid(
     min_samples: int,
     n_values: int,
 ) -> tuple[pd.DataFrame, np.ndarray, ClusteringSelection]:
-    """Evaluate DBSCAN eps values and select by valid Silhouette."""
     rows = []
     best = None
     best_labels = None
@@ -227,7 +219,6 @@ def plot_silhouette_curves(
     dbscan_df: pd.DataFrame,
     output_path: Path,
 ) -> None:
-    """Save Silhouette selection curves for GMM and DBSCAN."""
     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
 
     axes[0].plot(gmm_df["k"], gmm_df["silhouette"], marker="o", linewidth=2)
@@ -254,7 +245,6 @@ def plot_cluster_assignments(
     dbscan_labels: np.ndarray,
     output_path: Path,
 ) -> None:
-    """Save ground-truth and cluster assignments on a PCA 2D plane."""
     fig, axes = plt.subplots(1, 3, figsize=(20, 6))
 
     axes[0].scatter(Z2[:, 0], Z2[:, 1], c=y_true, cmap="tab10", s=24, alpha=0.78)
@@ -277,7 +267,6 @@ def plot_cluster_assignments(
 
 
 def run_phase2(args: argparse.Namespace) -> dict:
-    """Execute the Phase 2 clustering workflow."""
     configure_plots(args.font_size)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -332,7 +321,6 @@ def run_phase2(args: argparse.Namespace) -> dict:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Run Phase 2 clustering.")
     parser.add_argument("--train", default="eco_acoustic_train.csv")
     parser.add_argument("--output-dir", default="outputs/phase2")
@@ -347,7 +335,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """CLI entry point."""
     summary = run_phase2(parse_args())
     print_key_values(
         "FASE 2 - RESUMEN",

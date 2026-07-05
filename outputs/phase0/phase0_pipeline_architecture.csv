@@ -1,0 +1,8 @@
+step,stage,input,output,criterion_link
+1,Ingesta,eco_acoustic_train.csv / eco_acoustic_test.csv,DataFrames validados,C1
+2,Espacio vectorial,mel_0 ... mel_63,"X in R^64, y in {10,12,17,18,23}",C1
+3,Estandarizacion,X in R^64,X_scaled,C2-C4
+4,Exploracion geometrica,X_scaled,"PCA 2D, t-SNE 2D, metricas",C2
+5,Clustering,PCA 95%,"GMM, DBSCAN, Silhouette, DBI, CH",C3
+6,Clasificacion,"X_scaled, y",MLP TensorFlow vs XGBoost,C4
+7,Decision operacional,Vector de probabilidades,"Confianza, incertidumbre, rechazo",C5

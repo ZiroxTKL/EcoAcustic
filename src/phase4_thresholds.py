@@ -1,4 +1,3 @@
-"""Phase 4: probability thresholds for operational decision zones."""
 
 from __future__ import annotations
 
@@ -19,17 +18,17 @@ ZONE_ORDER = [ZONE_CONFIDENCE, ZONE_UNCERTAINTY, ZONE_REJECTION]
 
 
 def resolve_model_prefix(model: str, metrics_path: Path) -> str:
-    """Resolve the probability-column prefix to use."""
-    if model in {"mlp", "ensemble"}:
+    if model in {"mlp", "boosting", "ensemble"}:
+        if model == "ensemble":
+            return "boosting"
         return model
 
     metrics = pd.read_csv(metrics_path)
     best_model = metrics.sort_values("f1_weighted", ascending=False).iloc[0]["model"]
-    return "ensemble" if "Ensemble" in best_model else "mlp"
+    return "mlp" if best_model == "MLP" else "boosting"
 
 
 def assign_zone(probability: float, confidence: float, rejection: float) -> str:
-    """Assign one operational zone from the maximum posterior probability."""
     if probability >= confidence:
         return ZONE_CONFIDENCE
     if probability >= rejection:
@@ -43,7 +42,6 @@ def apply_threshold_policy(
     confidence: float,
     rejection: float,
 ) -> pd.DataFrame:
-    """Apply confidence, uncertainty and rejection thresholds."""
     proba_cols = [f"{prefix}_proba_{cls}" for cls in CLASS_ORDER]
     missing = [col for col in proba_cols if col not in predictions.columns]
     if missing:
@@ -66,7 +64,6 @@ def apply_threshold_policy(
 
 
 def summarize_zones(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Create global and species-level summaries for the policy."""
     rows = []
     total = len(df)
     for zone in ZONE_ORDER:
@@ -102,7 +99,6 @@ def plot_threshold_summary(
     rejection: float,
     output_path: Path,
 ) -> None:
-    """Save operational threshold diagnostics."""
     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
 
     axes[0].bar(
@@ -130,7 +126,6 @@ def plot_threshold_summary(
 
 
 def run_phase4(args: argparse.Namespace) -> dict:
-    """Execute the threshold policy workflow."""
     configure_plots(args.font_size)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -182,12 +177,11 @@ def run_phase4(args: argparse.Namespace) -> dict:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Run Phase 4 threshold policy.")
     parser.add_argument("--predictions", default="outputs/phase3/phase3_test_predictions.csv")
     parser.add_argument("--phase3-metrics", default="outputs/phase3/phase3_model_metrics.csv")
     parser.add_argument("--output-dir", default="outputs/phase4")
-    parser.add_argument("--model", choices=["best", "mlp", "ensemble"], default="best")
+    parser.add_argument("--model", choices=["best", "mlp", "boosting", "ensemble"], default="best")
     parser.add_argument("--confidence-threshold", type=float, default=0.85)
     parser.add_argument("--rejection-threshold", type=float, default=0.40)
     parser.add_argument("--font-size", type=int, default=14)
@@ -195,7 +189,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """CLI entry point."""
     summary = run_phase4(parse_args())
     print_key_values(
         "FASE 4 - RESUMEN",

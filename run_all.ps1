@@ -7,6 +7,7 @@ if (-not (Test-Path $Python)) {
 Write-Host "`n== Proyecto 2: ejecucion completa ==" -ForegroundColor Cyan
 Write-Host "Python usado: $Python" -ForegroundColor Cyan
 
+& $Python src\phase0_project_context.py
 & $Python src\phase1_dimensionality.py
 & $Python src\phase2_clustering.py
 & $Python src\phase3_classification.py

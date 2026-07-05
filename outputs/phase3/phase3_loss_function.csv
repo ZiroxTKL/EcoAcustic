@@ -1,0 +1,2 @@
+loss_name,mathematical_form,optimizer,learning_rate,output_distribution
+Sparse categorical cross-entropy,-1/N * sum_i sum_c y_ic log(p_ic),Adam,1e-3 default,Softmax probabilities over 5 species

@@ -1,4 +1,4 @@
 field,value
-selected_model_prefix,ensemble
+selected_model_prefix,boosting
 confidence_threshold,0.85
 rejection_threshold,0.4

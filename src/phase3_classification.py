@@ -1,5 +1,3 @@
-"""Phase 3: supervised classification with TensorFlow MLP and a tree ensemble."""
-
 from __future__ import annotations
 
 import argparse
@@ -9,13 +7,11 @@ from pathlib import Path
 
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
-import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-from sklearn.ensemble import ExtraTreesClassifier, HistGradientBoostingClassifier
-from sklearn.ensemble import RandomForestClassifier, VotingClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
@@ -29,7 +25,6 @@ from project_utils import load_project_csv, print_key_values, print_table
 
 
 class WeightedF1Callback(keras.callbacks.Callback):
-    """Track weighted F1 on train and validation sets after each epoch."""
 
     def __init__(self, train_data: tuple[np.ndarray, np.ndarray], val_data):
         super().__init__()
@@ -51,13 +46,11 @@ class WeightedF1Callback(keras.callbacks.Callback):
 
 
 def set_reproducibility(random_state: int) -> None:
-    """Set reproducibility controls for NumPy and TensorFlow."""
     np.random.seed(random_state)
     tf.keras.utils.set_random_seed(random_state)
 
 
 def build_mlp(input_dim: int, n_classes: int, learning_rate: float) -> keras.Model:
-    """Build the MLP topology with Batch Normalization and Dropout."""
     inputs = keras.Input(shape=(input_dim,), name="mfcc_input")
     x = layers.Dense(128, kernel_regularizer=regularizers.l2(1e-4))(inputs)
     x = layers.BatchNormalization()(x)
@@ -79,12 +72,60 @@ def build_mlp(input_dim: int, n_classes: int, learning_rate: float) -> keras.Mod
     return model
 
 
+def mlp_topology_table() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "block": "Entrada",
+                "operation": "MFCC estandarizados",
+                "units": 64,
+                "activation": "N/A",
+                "regularization": "StandardScaler",
+            },
+            {
+                "block": "Oculta 1",
+                "operation": "Dense + BatchNorm + ReLU + Dropout",
+                "units": 128,
+                "activation": "ReLU",
+                "regularization": "L2=1e-4, Dropout=0.30",
+            },
+            {
+                "block": "Oculta 2",
+                "operation": "Dense + BatchNorm + ReLU + Dropout",
+                "units": 64,
+                "activation": "ReLU",
+                "regularization": "L2=1e-4, Dropout=0.20",
+            },
+            {
+                "block": "Salida",
+                "operation": "Dense + Softmax",
+                "units": len(CLASS_ORDER),
+                "activation": "Softmax",
+                "regularization": "N/A",
+            },
+        ]
+    )
+
+
+def loss_function_table() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "loss_name": "Sparse categorical cross-entropy",
+                "mathematical_form": "-1/N * sum_i sum_c y_ic log(p_ic)",
+                "optimizer": "Adam",
+                "learning_rate": "1e-3 default",
+                "output_distribution": "Softmax probabilities over 5 species",
+            }
+        ]
+    )
+
+
 def build_mlp_dropout_before_bn(
     input_dim: int,
     n_classes: int,
     learning_rate: float,
 ) -> keras.Model:
-    """Build a variant with Dropout before Batch Normalization."""
     inputs = keras.Input(shape=(input_dim,), name="mfcc_input")
     x = layers.Dense(128, activation="relu", kernel_regularizer=regularizers.l2(1e-4))(inputs)
     x = layers.Dropout(0.30)(x)
@@ -111,7 +152,6 @@ def train_mlp(
     y_val: np.ndarray,
     args: argparse.Namespace,
 ) -> tuple[keras.Model, pd.DataFrame, float]:
-    """Train the TensorFlow MLP and return the history table."""
     class_weights = compute_class_weight(
         class_weight="balanced",
         classes=np.arange(len(CLASS_ORDER)),
@@ -164,7 +204,6 @@ def run_regularization_ablation(
     y_val: np.ndarray,
     args: argparse.Namespace,
 ) -> pd.DataFrame:
-    """Compare BatchNorm-before-Dropout against Dropout-before-BatchNorm."""
     rows = [
         {
             "variant": "BatchNorm -> ReLU -> Dropout",
@@ -211,75 +250,55 @@ def run_regularization_ablation(
     return pd.DataFrame(rows)
 
 
-def train_tree_ensemble(
+def train_gradient_boosting_model(
     X_train: np.ndarray,
     y_train: np.ndarray,
     X_val: np.ndarray,
     y_val: np.ndarray,
     random_state: int,
-) -> tuple[VotingClassifier, pd.DataFrame, float]:
-    """Train a soft-voting tree ensemble and report component validation F1."""
-    estimators = [
-        (
-            "random_forest",
-            RandomForestClassifier(
-                n_estimators=600,
-                max_features="sqrt",
-                class_weight="balanced_subsample",
-                random_state=random_state,
-                n_jobs=-1,
-            ),
-        ),
-        (
-            "extra_trees",
-            ExtraTreesClassifier(
-                n_estimators=600,
-                max_features="sqrt",
-                class_weight="balanced",
-                random_state=random_state,
-                n_jobs=-1,
-            ),
-        ),
-        (
-            "hist_gradient_boosting",
-            HistGradientBoostingClassifier(
-                max_iter=300,
-                learning_rate=0.05,
-                l2_regularization=0.01,
-                random_state=random_state,
-            ),
-        ),
-    ]
-    rows = []
-    total_elapsed = 0.0
+) -> tuple[object, pd.DataFrame, float, str]:
+    try:
+        from xgboost import XGBClassifier
 
-    for name, model in estimators:
-        start = time.perf_counter()
-        model.fit(X_train, y_train)
-        elapsed = time.perf_counter() - start
-        total_elapsed += elapsed
-
-        val_pred = model.predict(X_val)
-        val_f1 = f1_score(y_val, val_pred, average="weighted")
-        rows.append(
-            {"model": name, "val_f1_weighted": val_f1, "elapsed_seconds": elapsed}
+        model_name = "XGBoost"
+        model = XGBClassifier(
+            objective="multi:softprob",
+            num_class=len(CLASS_ORDER),
+            n_estimators=350,
+            max_depth=4,
+            learning_rate=0.04,
+            subsample=0.90,
+            colsample_bytree=0.85,
+            reg_lambda=1.0,
+            eval_metric="mlogloss",
+            tree_method="hist",
+            random_state=random_state,
+            n_jobs=-1,
+        )
+    except ImportError:
+        model_name = "HistGradientBoosting"
+        model = HistGradientBoostingClassifier(
+            max_iter=350,
+            learning_rate=0.05,
+            l2_regularization=0.01,
+            random_state=random_state,
         )
 
-    ensemble = VotingClassifier(estimators=estimators, voting="soft", n_jobs=-1)
     start = time.perf_counter()
-    ensemble.fit(X_train, y_train)
-    ensemble_elapsed = time.perf_counter() - start
-    total_elapsed += ensemble_elapsed
+    model.fit(X_train, y_train)
+    elapsed = time.perf_counter() - start
 
-    val_pred = ensemble.predict(X_val)
-    rows.append(
+    val_pred = model.predict(X_val)
+    rows = [
         {
-            "model": "soft_voting_ensemble",
+            "model": model_name,
+            "paradigm": "gradient_boosted_decision_trees",
             "val_f1_weighted": f1_score(y_val, val_pred, average="weighted"),
-            "elapsed_seconds": ensemble_elapsed,
+            "val_f1_macro": f1_score(y_val, val_pred, average="macro"),
+            "elapsed_seconds": elapsed,
         }
-    )
-    return ensemble, pd.DataFrame(rows), total_elapsed
+    ]
+    return model, pd.DataFrame(rows), elapsed, model_name
 
 
 def evaluate_classifier(
@@ -289,7 +308,6 @@ def evaluate_classifier(
     y_test: np.ndarray,
     elapsed_seconds: float,
 ) -> tuple[dict, np.ndarray, np.ndarray]:
-    """Evaluate a fitted classifier on the external test split."""
     probabilities = model.predict(X_test, verbose=0) if name == "MLP" else model.predict_proba(X_test)
     y_pred = np.argmax(probabilities, axis=1)
     report = classification_report(
@@ -312,7 +330,6 @@ def evaluate_classifier(
 
 
 def plot_learning_curves(history_df: pd.DataFrame, output_path: Path) -> None:
-    """Save MLP learning curves for loss, accuracy and weighted F1."""
     fig, axes = plt.subplots(1, 3, figsize=(20, 6))
 
     axes[0].plot(history_df["epoch"], history_df["loss"], label="Train")
@@ -340,18 +357,47 @@ def plot_learning_curves(history_df: pd.DataFrame, output_path: Path) -> None:
     plt.close(fig)
 
 
+def plot_regularization_ablation(ablation_df: pd.DataFrame, output_path: Path) -> None:
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+
+    axes[0].bar(
+        ablation_df["variant"],
+        ablation_df["best_val_loss"],
+        color=["#378ADD", "#EF9F27"],
+    )
+    axes[0].set_title("Mejor val-loss", fontsize=16)
+    axes[0].set_ylabel("Cross-entropy", fontsize=14)
+
+    axes[1].bar(
+        ablation_df["variant"],
+        ablation_df["best_val_f1_weighted"],
+        color=["#378ADD", "#EF9F27"],
+    )
+    axes[1].set_title("Mejor F1 ponderado", fontsize=16)
+    axes[1].set_ylabel("F1-score", fontsize=14)
+
+    for ax in axes:
+        ax.set_xlabel("Orden de regularizacion", fontsize=14)
+        ax.tick_params(axis="x", labelrotation=15, labelsize=14)
+        ax.tick_params(axis="y", labelsize=14)
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+
 def plot_confusion_matrices(
     y_test: np.ndarray,
     mlp_pred: np.ndarray,
-    ensemble_pred: np.ndarray,
+    boosting_pred: np.ndarray,
+    boosting_name: str,
     output_path: Path,
 ) -> None:
-    """Save confusion matrices for both supervised models."""
     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
 
     for ax, pred, title in [
         (axes[0], mlp_pred, "MLP TensorFlow"),
-        (axes[1], ensemble_pred, "Soft Voting Ensemble"),
+        (axes[1], boosting_pred, boosting_name),
     ]:
         cm = confusion_matrix(y_test, pred, labels=np.arange(len(CLASS_ORDER)))
         im = ax.imshow(cm, cmap="Blues")
@@ -379,26 +425,24 @@ def save_prediction_table(
     test_df: pd.DataFrame,
     y_test: np.ndarray,
     mlp_pred: np.ndarray,
-    ensemble_pred: np.ndarray,
+    boosting_pred: np.ndarray,
     mlp_proba: np.ndarray,
-    ensemble_proba: np.ndarray,
+    boosting_proba: np.ndarray,
     output_path: Path,
 ) -> None:
-    """Save test predictions and class probabilities for Phase 4."""
     out = test_df[["recording_id", "species_id", "songtype_id", "is_tp"]].copy()
     out["y_true_encoded"] = y_test
     out["mlp_pred"] = [CLASS_ORDER[idx] for idx in mlp_pred]
-    out["ensemble_pred"] = [CLASS_ORDER[idx] for idx in ensemble_pred]
+    out["boosting_pred"] = [CLASS_ORDER[idx] for idx in boosting_pred]
 
     for idx, cls in enumerate(CLASS_ORDER):
         out[f"mlp_proba_{cls}"] = mlp_proba[:, idx]
-        out[f"ensemble_proba_{cls}"] = ensemble_proba[:, idx]
+        out[f"boosting_proba_{cls}"] = boosting_proba[:, idx]
 
     out.to_csv(output_path, index=False)
 
 
 def classification_reports_to_csv(reports: dict, output_path: Path) -> None:
-    """Save sklearn classification reports in long CSV format."""
     rows = []
     for model_name, report in reports.items():
         for label, metrics in report.items():
@@ -419,7 +463,6 @@ def classification_reports_to_csv(reports: dict, output_path: Path) -> None:
 
 
 def run_phase3(args: argparse.Namespace) -> dict:
-    """Execute the Phase 3 classification workflow."""
     set_reproducibility(args.random_state)
     configure_plots(args.font_size)
     output_dir = Path(args.output_dir)
@@ -448,31 +491,33 @@ def run_phase3(args: argparse.Namespace) -> dict:
     ablation_df = run_regularization_ablation(
         history_df, X_train_scaled, y_train, X_val_scaled, y_val, args
     )
-    ensemble, ensemble_validation_df, ensemble_elapsed = train_tree_ensemble(
+    boosting, boosting_validation_df, boosting_elapsed, boosting_name = train_gradient_boosting_model(
         X_train_scaled, y_train, X_val_scaled, y_val, args.random_state
     )
 
     mlp_metrics, mlp_pred, mlp_proba = evaluate_classifier(
         "MLP", mlp, X_test_scaled, y_test, mlp_elapsed
     )
-    ensemble_metrics, ensemble_pred, ensemble_proba = evaluate_classifier(
-        "Soft Voting Ensemble", ensemble, X_test_scaled, y_test, ensemble_elapsed
+    boosting_metrics, boosting_pred, boosting_proba = evaluate_classifier(
+        boosting_name, boosting, X_test_scaled, y_test, boosting_elapsed
     )
 
     metrics_df = pd.DataFrame(
         [
             {k: v for k, v in mlp_metrics.items() if k != "classification_report"},
-            {k: v for k, v in ensemble_metrics.items() if k != "classification_report"},
+            {k: v for k, v in boosting_metrics.items() if k != "classification_report"},
         ]
     )
+    mlp_topology_table().to_csv(output_dir / "phase3_mlp_topology.csv", index=False)
+    loss_function_table().to_csv(output_dir / "phase3_loss_function.csv", index=False)
     metrics_df.to_csv(output_dir / "phase3_model_metrics.csv", index=False)
     history_df.to_csv(output_dir / "phase3_mlp_history.csv", index=False)
     ablation_df.to_csv(output_dir / "phase3_regularization_ablation.csv", index=False)
-    ensemble_validation_df.to_csv(output_dir / "phase3_ensemble_validation.csv", index=False)
+    boosting_validation_df.to_csv(output_dir / "phase3_boosting_validation.csv", index=False)
 
     reports = {
         "MLP": mlp_metrics["classification_report"],
-        "Soft Voting Ensemble": ensemble_metrics["classification_report"],
+        boosting_name: boosting_metrics["classification_report"],
     }
     classification_reports_to_csv(
         reports,
@@ -483,30 +528,32 @@ def run_phase3(args: argparse.Namespace) -> dict:
         test_df,
         y_test,
         mlp_pred,
-        ensemble_pred,
+        boosting_pred,
         mlp_proba,
-        ensemble_proba,
+        boosting_proba,
         output_dir / "phase3_test_predictions.csv",
     )
 
     plot_learning_curves(history_df, output_dir / "phase3_mlp_learning_curves.png")
+    plot_regularization_ablation(
+        ablation_df,
+        output_dir / "phase3_regularization_ablation.png",
+    )
     plot_confusion_matrices(
-        y_test, mlp_pred, ensemble_pred, output_dir / "phase3_confusion_matrices.png"
+        y_test,
+        mlp_pred,
+        boosting_pred,
+        boosting_name,
+        output_dir / "phase3_confusion_matrices.png",
     )
 
     if args.save_models:
         mlp.save(output_dir / "phase3_mlp_model.keras")
-        joblib.dump(
-            ensemble,
-            output_dir / "phase3_soft_voting_ensemble.joblib",
-            compress=3,
-        )
-        joblib.dump(scaler, output_dir / "phase3_standard_scaler.joblib")
 
     best_model = (
         "MLP"
-        if mlp_metrics["f1_weighted"] >= ensemble_metrics["f1_weighted"]
-        else "Soft Voting Ensemble"
+        if mlp_metrics["f1_weighted"] >= boosting_metrics["f1_weighted"]
+        else boosting_name
     )
     summary = {
         "validation_size": args.validation_size,
@@ -514,12 +561,17 @@ def run_phase3(args: argparse.Namespace) -> dict:
         "best_model_by_test_f1_weighted": best_model,
         "metrics": metrics_df.to_dict(orient="records"),
         "outputs": {
+            "topology": str(output_dir / "phase3_mlp_topology.csv"),
+            "loss_function": str(output_dir / "phase3_loss_function.csv"),
             "metrics": str(output_dir / "phase3_model_metrics.csv"),
             "history": str(output_dir / "phase3_mlp_history.csv"),
             "regularization_ablation": str(
                 output_dir / "phase3_regularization_ablation.csv"
             ),
-            "ensemble_validation": str(output_dir / "phase3_ensemble_validation.csv"),
+            "regularization_ablation_plot": str(
+                output_dir / "phase3_regularization_ablation.png"
+            ),
+            "boosting_validation": str(output_dir / "phase3_boosting_validation.csv"),
             "classification_reports": str(
                 output_dir / "phase3_classification_reports.csv"
             ),
@@ -533,6 +585,7 @@ def run_phase3(args: argparse.Namespace) -> dict:
         [
             {"field": "validation_size", "value": args.validation_size},
             {"field": "epochs_trained", "value": int(len(history_df))},
+            {"field": "gradient_boosting_model", "value": boosting_name},
             {"field": "best_model_by_test_f1_weighted", "value": best_model},
         ]
     ).to_csv(output_dir / "phase3_summary.csv", index=False)
@@ -540,7 +593,6 @@ def run_phase3(args: argparse.Namespace) -> dict:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Run Phase 3 classification.")
     parser.add_argument("--train", default="eco_acoustic_train.csv")
     parser.add_argument("--test", default="eco_acoustic_test.csv")
@@ -559,7 +611,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """CLI entry point."""
     summary = run_phase3(parse_args())
     print_key_values(
         "FASE 3 - RESUMEN",
@@ -569,14 +620,18 @@ def main() -> None:
             "Mejor modelo por F1 test": summary["best_model_by_test_f1_weighted"],
         },
     )
+    topology = pd.read_csv(summary["outputs"]["topology"])
+    print_table("FASE 3 - TOPOLOGIA MLP", topology.to_dict(orient="records"))
+    loss = pd.read_csv(summary["outputs"]["loss_function"])
+    print_table("FASE 3 - FUNCION DE PERDIDA", loss.to_dict(orient="records"))
     print_table("FASE 3 - METRICAS EN TEST", summary["metrics"])
     ablation = pd.read_csv(summary["outputs"]["regularization_ablation"])
     print_table(
         "FASE 3 - ABLACION DE REGULARIZACION",
         ablation.to_dict(orient="records"),
     )
-    validation = pd.read_csv(summary["outputs"]["ensemble_validation"])
-    print_table("FASE 3 - ENSAMBLE EN VALIDACION", validation.to_dict(orient="records"))
+    validation = pd.read_csv(summary["outputs"]["boosting_validation"])
+    print_table("FASE 3 - XGBOOST EN VALIDACION", validation.to_dict(orient="records"))
     print_key_values("FASE 3 - ARCHIVOS GENERADOS", summary["outputs"])
 
 

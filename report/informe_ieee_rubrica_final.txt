@@ -1,0 +1,283 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-nodecimaldot]{babel}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{url}
+
+\graphicspath{
+  {../outputs/phase0/}
+  {../outputs/phase1/}
+  {../outputs/phase2/}
+  {../outputs/phase3/}
+  {../outputs/phase4/}
+}
+
+\title{Proyecto 2: Clasificaci\'on de Se\~nales Eco-Ac\'usticas}
+
+\author{
+\IEEEauthorblockN{Nombre del estudiante}
+\IEEEauthorblockA{Curso CS3061 -- Machine Learning\\
+UTEC\\
+Repositorio: \url{https://github.com/usuario/repositorio}}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Se implement\'o un pipeline integral de Machine Learning para la clasificaci\'on de se\~nales eco-ac\'usticas a partir de vectores MFCC de 64 dimensiones. Se evaluaron m\'etodos de reducci\'on de dimensionalidad, estructuras de clustering no supervisado, clasificadores supervisados basados en MLP y XGBoost, y una pol\'itica operativa de mitigaci\'on de riesgos mediante umbrales probabil\'isticos. Se observ\'o que t-SNE preserv\'o mejor las relaciones locales que PCA, DBSCAN present\'o mayor Silhouette que GMM, y XGBoost super\'o al MLP en F1 ponderado sobre el conjunto de prueba.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Eco-ac\'ustica, MFCC, PCA, t-SNE, DBSCAN, GMM, MLP, XGBoost, MLOps.
+\end{IEEEkeywords}
+
+\section{Resumen Ejecutivo e Introducci\'on al Espacio Vectorial}
+
+Se abord\'o el problema de clasificaci\'on automatizada de se\~nales eco-ac\'usticas para apoyar la identificaci\'on de especies faun\'isticas mediante datos tabulares preprocesados. Desde la perspectiva de negocio e impacto ecol\'ogico, una clasificaci\'on confiable permite priorizar revisiones humanas, disminuir costos de monitoreo y acelerar la detecci\'on de actividad biol\'ogica en ambientes con ruido. El problema fue formulado como clasificaci\'on supervisada multiclase, donde cada muestra fue representada por un vector $\mathbf{x}_i \in \mathbb{R}^{64}$ y una etiqueta $y_i \in \{10,12,17,18,23\}$.
+
+Se utilizaron estrictamente los archivos \texttt{eco\_acoustic\_train.csv} y \texttt{eco\_acoustic\_test.csv}. El conjunto de entrenamiento contuvo 1906 observaciones y el conjunto de prueba contuvo 477 observaciones. Las variables predictoras correspondieron a \texttt{mel\_0}--\texttt{mel\_63}, mientras que \texttt{recording\_id}, \texttt{songtype\_id} e \texttt{is\_tp} fueron conservadas como metadatos. La Tabla~\ref{tab:vector-space} resume la estructura vectorial del dataset.
+
+\begin{table}[!t]
+\centering
+\caption{Resumen del espacio vectorial utilizado en el proyecto.}
+\label{tab:vector-space}
+\begin{tabular}{lrrll}
+\toprule
+Split & $N$ & $d$ & Espacio & Objetivo \\
+\midrule
+Train & 1906 & 64 & $\mathbb{R}^{64}$ & \texttt{species\_id} \\
+Test & 477 & 64 & $\mathbb{R}^{64}$ & \texttt{species\_id} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La distribuci\'on de clases fue moderadamente desbalanceada, con mayor presencia de las clases 17 y 23. En entrenamiento, las proporciones fueron 0.145 para la clase 10, 0.145 para la clase 12, 0.273 para la clase 17, 0.146 para la clase 18 y 0.290 para la clase 23. Esta condici\'on justific\'o el uso de F1-score como m\'etrica central durante la etapa supervisada.
+
+La arquitectura del pipeline se muestra en la Figura~\ref{fig:pipeline}. Se incluy\'o el flujo completo desde la ingesta del CSV hasta la inferencia probabil\'istica y la asignaci\'on de zonas operativas, de modo que la soluci\'on qued\'o conectada con el despliegue informativo requerido por el proyecto.
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=0.88\textwidth]{phase0_pipeline_architecture.png}
+\caption{Arquitectura del pipeline desde los archivos CSV hasta la decisi\'on operacional basada en probabilidades.}
+\label{fig:pipeline}
+\end{figure*}
+
+\section{Exploraci\'on Geom\'etrica y Reducci\'on de Dimensionalidad}
+
+Se estandarizaron las 64 variables MFCC antes de aplicar los m\'etodos de reducci\'on de dimensionalidad. Esta decisi\'on fue necesaria porque PCA y t-SNE son sensibles a la escala de las variables. Se ajust\'o PCA completo para estimar la varianza acumulada y se identific\'o que 11 componentes fueron suficientes para alcanzar el 95\% de varianza acumulada.
+
+Posteriormente, se compar\'o PCA 2D contra t-SNE 2D. PCA fue utilizado como referencia lineal para preservar estructura global, mientras que t-SNE fue utilizado como aproximaci\'on no lineal orientada a preservar vecindarios locales. Los resultados cuantitativos se presentan en la Tabla~\ref{tab:dimred}.
+
+\begin{table}[!t]
+\centering
+\caption{Comparaci\'on cuantitativa entre PCA y t-SNE.}
+\label{tab:dimred}
+\begin{tabular}{lrrrr}
+\toprule
+M\'etodo & Tiempo & Var. 2D & Trust@10 & Corr. dist. \\
+\midrule
+PCA 2D & 0.003 & 0.671 & 0.867 & 0.947 \\
+t-SNE 2D & 8.643 & N/A & 0.987 & 0.590 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Se observ\'o que PCA retuvo 67.1\% de la varianza en dos dimensiones y preserv\'o mejor la correlaci\'on global de distancias. En contraste, t-SNE alcanz\'o mayor \textit{trustworthiness} local, lo cual evidenci\'o una mejor preservaci\'on de vecindarios. La Figura~\ref{fig:pca-tsne} muestra la separaci\'on visual obtenida con ambos m\'etodos.
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=0.92\textwidth]{phase1_embeddings.png}
+\caption{Proyecciones PCA 2D y t-SNE 2D coloreadas por \texttt{species\_id}.}
+\label{fig:pca-tsne}
+\end{figure*}
+
+La Figura~\ref{fig:pca-diagnostics} muestra la curva de varianza acumulada de PCA y la diferencia temporal entre m\'etodos. Esta evidencia justific\'o la elecci\'on de PCA como herramienta interpretable y de t-SNE como herramienta exploratoria no lineal.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\linewidth]{phase1_diagnostics.png}
+\caption{Varianza acumulada de PCA y comparaci\'on temporal de los m\'etodos.}
+\label{fig:pca-diagnostics}
+\end{figure}
+
+\section{Miner\'ia de Patrones y Estructuras de Clustering}
+
+Se implementaron dos paradigmas de aprendizaje no supervisado sobre una representaci\'on PCA que conserv\'o el 95\% de la varianza. Se utiliz\'o Gaussian Mixture Models (GMM) como modelo probabil\'istico y DBSCAN como m\'etodo basado en densidad. Para GMM se evalu\'o una grilla de valores de $k$, mientras que para DBSCAN se exploraron radios $\varepsilon$ derivados de distancias al vecino m\'as cercano.
+
+La Tabla~\ref{tab:cluster} resume los hiperpar\'ametros seleccionados y las m\'etricas internas. El Coeficiente de Silhouette fue utilizado como criterio principal, debido a que mide simult\'aneamente cohesi\'on intra-cluster y separaci\'on inter-cluster mediante $(b-a)/\max(a,b)$. Como m\'etricas complementarias se reportaron Davies-Bouldin (DBI) y Calinski-Harabasz (CH).
+
+\begin{table}[!t]
+\centering
+\caption{Selecci\'on de modelos de clustering mediante m\'etricas internas.}
+\label{tab:cluster}
+\begin{tabular}{lrrrrr}
+\toprule
+M\'etodo & Clust. & Sil. & DBI & CH & Ruido \\
+\midrule
+GMM ($k=2$) & 2 & 0.184 & 1.992 & 382.1 & 0.000 \\
+DBSCAN & 2 & 0.436 & 0.604 & 53.3 & 0.056 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+DBSCAN alcanz\'o mayor Silhouette y menor DBI, por lo que produjo grupos m\'as compactos y separados bajo el criterio geom\'etrico elegido. Sin embargo, el ARI fue bajo para ambos modelos, lo que indic\'o que la estructura no supervisada no coincidi\'o fuertemente con las etiquetas de especie. Dado que \texttt{species\_id} no fue usado durante el ajuste, el ARI fue interpretado solo como diagn\'ostico externo.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\linewidth]{phase2_silhouette_selection.png}
+\caption{Selecci\'on de hiperpar\'ametros mediante Silhouette para GMM y DBSCAN.}
+\label{fig:silhouette}
+\end{figure}
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\linewidth]{phase2_clusters_pca2d.png}
+\caption{Asignaciones de clustering visualizadas en el plano PCA 2D.}
+\label{fig:clusters}
+\end{figure}
+
+\section{Arquitectura de Clasificaci\'on: MLP vs. Modelos de Ensamble}
+
+Se entren\'o una red neuronal MLP con TensorFlow/Keras y se compar\'o contra XGBoost, un ensamble de \'arboles de decisi\'on por gradiente. La funci\'on de p\'erdida utilizada para el MLP fue la entrop\'ia cruzada categ\'orica dispersa:
+\begin{equation}
+\mathcal{L} = -\frac{1}{N}\sum_{i=1}^{N}\sum_{c=1}^{5} y_{ic}\log(\hat{p}_{ic}),
+\end{equation}
+donde $y_{ic}$ representa la pertenencia real a la clase $c$ y $\hat{p}_{ic}$ corresponde a la probabilidad estimada por la capa \textit{softmax}. La optimizaci\'on fue realizada mediante Adam.
+
+\begin{table}[!t]
+\centering
+\caption{Topolog\'ia del MLP implementado en TensorFlow/Keras.}
+\label{tab:mlp-topology}
+\begin{tabular}{lrrl}
+\toprule
+Bloque & Unid. & Activ. & Regularizaci\'on \\
+\midrule
+Entrada & 64 & N/A & StandardScaler \\
+Oculta 1 & 128 & ReLU & L2, Dropout 0.30 \\
+Oculta 2 & 64 & ReLU & L2, Dropout 0.20 \\
+Salida & 5 & Softmax & N/A \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Se evalu\'o el impacto experimental del orden relativo entre Batch Normalization y Dropout. La variante principal aplic\'o Batch Normalization antes de ReLU y Dropout, mientras que la variante alternativa aplic\'o Dropout antes de Batch Normalization. Los resultados se resumen en la Tabla~\ref{tab:regularization}.
+
+\begin{table}[!t]
+\centering
+\caption{Ablaci\'on del orden entre Batch Normalization y Dropout.}
+\label{tab:regularization}
+\begin{tabular}{lrrr}
+\toprule
+Variante & Val-loss & Val-acc. & Val-F1 \\
+\midrule
+BN $\rightarrow$ ReLU $\rightarrow$ Dropout & 1.288 & 0.450 & 0.452 \\
+Dropout $\rightarrow$ BN & 1.254 & 0.463 & 0.436 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Aunque la segunda variante redujo la p\'erdida de validaci\'on, la configuraci\'on principal obtuvo mayor F1 ponderado. Por ello, se mantuvo el orden Batch Normalization, ReLU y Dropout para el modelo final. La comparaci\'on visual de esta ablaci\'on se muestra en la Figura~\ref{fig:ablation}.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\linewidth]{phase3_regularization_ablation.png}
+\caption{Comparaci\'on de regularizaci\'on seg\'un el orden entre Batch Normalization y Dropout.}
+\label{fig:ablation}
+\end{figure}
+
+Las curvas de aprendizaje del MLP se presentan en la Figura~\ref{fig:learning}. Se evidenci\'o una reducci\'on progresiva de la p\'erdida de entrenamiento y una estabilizaci\'on de la p\'erdida de validaci\'on, lo cual motiv\'o el uso de parada temprana.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\linewidth]{phase3_mlp_learning_curves.png}
+\caption{Curvas de p\'erdida, exactitud y F1 ponderado del MLP.}
+\label{fig:learning}
+\end{figure}
+
+La comparaci\'on final sobre el conjunto de prueba se muestra en la Tabla~\ref{tab:classification}. XGBoost obtuvo mayor exactitud y mayor F1 ponderado que el MLP. No obstante, el MLP alcanz\'o un F1 macro ligeramente superior, lo cual sugiere diferencias en la distribuci\'on de errores por clase.
+
+\begin{table}[!t]
+\centering
+\caption{Comparaci\'on supervisada sobre el conjunto de prueba.}
+\label{tab:classification}
+\begin{tabular}{lrrrr}
+\toprule
+Modelo & Acc. & F1 macro & F1 pond. & Tiempo \\
+\midrule
+MLP & 0.451 & 0.451 & 0.450 & 31.428 \\
+XGBoost & 0.486 & 0.420 & 0.464 & 2.969 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Las matrices de confusi\'on de la Figura~\ref{fig:confusion} muestran que ambas arquitecturas presentaron confusiones relevantes entre especies, especialmente hacia clases mayoritarias. Por ello, se prioriz\'o F1-score en lugar de accuracy como m\'etrica de comparaci\'on.
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=0.90\textwidth]{phase3_confusion_matrices.png}
+\caption{Matrices de confusi\'on del MLP y XGBoost sobre el conjunto de prueba.}
+\label{fig:confusion}
+\end{figure*}
+
+\section{Decisiones de Ingenier\'ia y Mitigaci\'on de Riesgos (MLOps \& Negocio)}
+
+Se analiz\'o el compromiso entre costo computacional y desempe\~no predictivo. El MLP requiri\'o 31.428 s y alcanz\'o F1 ponderado de 0.450, mientras que XGBoost requiri\'o 2.969 s y alcanz\'o F1 ponderado de 0.464. Por tanto, XGBoost present\'o simult\'aneamente menor costo computacional y mejor rendimiento ponderado, por lo que fue seleccionado para la l\'ogica operacional de umbrales.
+
+La pol\'itica de mitigaci\'on de riesgos fue definida a partir de la probabilidad posterior m\'axima $P$. Se establecieron tres zonas: confianza si $P \geq 0.85$, incertidumbre si $0.40 \leq P < 0.85$ y rechazo si $P < 0.40$. La Tabla~\ref{tab:thresholds} resume los resultados operativos.
+
+\begin{table}[!t]
+\centering
+\caption{Resumen de zonas operativas sobre el conjunto de prueba.}
+\label{tab:thresholds}
+\begin{tabular}{lrrrr}
+\toprule
+Zona & Obs. & Cob. & Acc. & Prob. \\
+\midrule
+Confianza & 13 & 0.027 & 0.692 & 0.885 \\
+Incertidumbre & 393 & 0.824 & 0.494 & 0.584 \\
+Rechazo & 71 & 0.149 & 0.408 & 0.347 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La zona de confianza mostr\'o baja cobertura, pero mayor accuracy que las dem\'as zonas. Por ello, se concluy\'o que la automatizaci\'on completa debe limitarse a predicciones de alta probabilidad, mientras que la mayor parte de los registros debe pasar a revisi\'on asistida. La Figura~\ref{fig:thresholds} muestra la distribuci\'on de probabilidades y los cortes definidos.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\linewidth]{phase4_threshold_diagnostics.png}
+\caption{Distribuci\'on de zonas y probabilidades posteriores m\'aximas.}
+\label{fig:thresholds}
+\end{figure}
+
+\section{Contribution statement}
+
+La Tabla~\ref{tab:contribution} presenta la matriz de coevaluaci\'on solicitada. Antes de la entrega final, se debe reemplazar el nombre gen\'erico por el nombre real registrado en el curso y ajustar porcentajes si el trabajo fue grupal.
+
+\begin{table}[!t]
+\centering
+\caption{Matriz de coevaluaci\'on del equipo de desarrollo.}
+\label{tab:contribution}
+\begin{tabular}{p{0.28\linewidth}rp{0.42\linewidth}}
+\toprule
+Nombre del Integrante & \% & Tareas encargadas \\
+\midrule
+Nombre del estudiante & 100 & Pipeline, experimentos, an\'alisis y reporte \\
+No aplica & 0 & No aplica \\
+No aplica & 0 & No aplica \\
+No aplica & 0 & No aplica \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section*{Conclusi\'on}
+
+Se implement\'o un pipeline reproducible para clasificaci\'on de se\~nales eco-ac\'usticas, cubriendo exploraci\'on geom\'etrica, clustering, clasificaci\'on supervisada y mitigaci\'on operacional de riesgos. Se determin\'o que t-SNE fue m\'as adecuado para preservar vecindarios locales, DBSCAN produjo mejor estructura geom\'etrica no supervisada que GMM y XGBoost fue preferible al MLP bajo F1 ponderado y costo computacional. Finalmente, la l\'ogica de umbrales permiti\'o separar decisiones autom\'aticas, revisi\'on asistida y rechazo para reducir riesgos de clasificaci\'on.
+
+\end{document}

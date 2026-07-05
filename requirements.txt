@@ -1,8 +1,0 @@
-numpy>=1.26
-pandas>=2.2
-matplotlib>=3.8
-scikit-learn>=1.4
-tensorflow>=2.21
-
-# Optional for the UMAP branch in src/phase1_dimensionality.py:
-# umap-learn>=0.5

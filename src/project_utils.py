@@ -1,4 +1,3 @@
-"""Shared utilities for the eco-acoustic classification project."""
 
 from __future__ import annotations
 
@@ -24,7 +23,6 @@ CLASS_COLORS = {
 
 
 def configure_plots(font_size: int = 14) -> None:
-    """Configure Matplotlib with fonts that satisfy the project rule."""
     plt.style.use("seaborn-v0_8-whitegrid")
     plt.rcParams.update(
         {
@@ -42,13 +40,11 @@ def configure_plots(font_size: int = 14) -> None:
 
 
 def get_mel_columns(df: pd.DataFrame) -> list[str]:
-    """Return mel_0 ... mel_63 columns in numeric order."""
     mel_cols = [col for col in df.columns if col.startswith("mel_")]
     return sorted(mel_cols, key=lambda name: int(name.split("_")[1]))
 
 
 def load_project_csv(path: str | Path) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
-    """Load a project CSV and return dataframe, feature matrix and labels."""
     df = pd.read_csv(path)
     feature_cols = get_mel_columns(df)
 
@@ -67,24 +63,20 @@ def load_project_csv(path: str | Path) -> tuple[pd.DataFrame, np.ndarray, np.nda
 
 
 def encode_labels(y: np.ndarray) -> np.ndarray:
-    """Encode species_id labels as 0 ... 4."""
     return np.array([CLASS_TO_INDEX[int(label)] for label in y], dtype=int)
 
 
 def decode_labels(y_encoded: np.ndarray) -> np.ndarray:
-    """Decode integer labels back to species_id values."""
     return np.array([INDEX_TO_CLASS[int(label)] for label in y_encoded], dtype=int)
 
 
 def write_text(path: str | Path, content: str) -> None:
-    """Write UTF-8 text after creating parent directories."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
 
 def _format_cell(value: object) -> str:
-    """Format a scalar value for compact console tables."""
     if pd.isna(value):
         return "N/A"
     if isinstance(value, float):
@@ -93,7 +85,6 @@ def _format_cell(value: object) -> str:
 
 
 def print_table(title: str, rows: list[dict], columns: list[str] | None = None) -> None:
-    """Print a lightweight ASCII table without extra dependencies."""
     print(f"\n{title}")
     if not rows:
         print("(sin filas)")
@@ -120,6 +111,5 @@ def print_table(title: str, rows: list[dict], columns: list[str] | None = None) 
 
 
 def print_key_values(title: str, values: dict[str, object]) -> None:
-    """Print key-value pairs as a two-column table."""
     rows = [{"Campo": key, "Valor": value} for key, value in values.items()]
     print_table(title, rows, columns=["Campo", "Valor"])

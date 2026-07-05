@@ -1,10 +1,3 @@
-"""Phase 1: dimensionality reduction for eco-acoustic MFCC features.
-
-This module adapts the professor's PCA/t-SNE workflow to the project data:
-StandardScaler, full PCA for cumulative variance, PCA 2D, t-SNE/UMAP 2D,
-execution-time measurement, and distance-preservation diagnostics.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -44,7 +37,6 @@ class EmbeddingResult:
 
 
 def configure_plots(font_size: int = 14) -> None:
-    """Configure Matplotlib with fonts that satisfy the report constraint."""
     plt.style.use("seaborn-v0_8-whitegrid")
     plt.rcParams.update(
         {
@@ -62,13 +54,11 @@ def configure_plots(font_size: int = 14) -> None:
 
 
 def get_mel_columns(df: pd.DataFrame) -> list[str]:
-    """Return mel_0 ... mel_63 columns in numeric order."""
     mel_cols = [col for col in df.columns if col.startswith("mel_")]
     return sorted(mel_cols, key=lambda name: int(name.split("_")[1]))
 
 
 def load_dataset(path: Path) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, list[str]]:
-    """Load and validate one project CSV."""
     df = pd.read_csv(path)
     feature_cols = get_mel_columns(df)
 
@@ -87,7 +77,6 @@ def load_dataset(path: Path) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, list
 
 
 def fit_full_pca(X_scaled: np.ndarray) -> tuple[PCA, np.ndarray, int]:
-    """Fit complete PCA and find the number of components for 95% variance."""
     pca_full = PCA()
     pca_full.fit(X_scaled)
     cumulative_variance = np.cumsum(pca_full.explained_variance_ratio_)
@@ -101,7 +90,6 @@ def sampled_distance_correlation(
     n_pairs: int,
     random_state: int,
 ) -> float:
-    """Estimate Pearson correlation between original and embedded distances."""
     rng = np.random.default_rng(random_state)
     n_samples = X_scaled.shape[0]
     idx_a = rng.integers(0, n_samples, size=n_pairs)
@@ -127,7 +115,6 @@ def evaluate_embedding(
     n_pairs: int,
     random_state: int,
 ) -> EmbeddingResult:
-    """Compute local and global distance-preservation diagnostics."""
     local_score = trustworthiness(X_scaled, Z, n_neighbors=10)
     distance_corr = sampled_distance_correlation(
         X_scaled=X_scaled,
@@ -150,7 +137,6 @@ def fit_pca_2d(
     n_pairs: int,
     random_state: int,
 ) -> tuple[np.ndarray, PCA, EmbeddingResult]:
-    """Fit PCA 2D and evaluate variance and reconstruction error."""
     start = time.perf_counter()
     pca_2d = PCA(n_components=2)
     Z_pca = pca_2d.fit_transform(X_scaled)
@@ -174,7 +160,6 @@ def fit_pca_2d(
 
 
 def build_tsne(perplexity: float, random_state: int) -> TSNE:
-    """Build a t-SNE estimator compatible with recent scikit-learn versions."""
     return TSNE(
         n_components=2,
         perplexity=perplexity,
@@ -191,7 +176,6 @@ def fit_tsne_2d(
     n_pairs: int,
     random_state: int,
 ) -> tuple[np.ndarray, EmbeddingResult]:
-    """Fit t-SNE 2D and evaluate distance preservation."""
     start = time.perf_counter()
     Z_tsne = build_tsne(perplexity, random_state).fit_transform(X_scaled)
     elapsed = time.perf_counter() - start
@@ -214,7 +198,6 @@ def fit_umap_2d(
     n_pairs: int,
     random_state: int,
 ) -> tuple[np.ndarray, EmbeddingResult]:
-    """Fit UMAP 2D when umap-learn is installed."""
     try:
         import umap
     except ImportError as exc:
@@ -244,7 +227,6 @@ def fit_umap_2d(
 
 
 def scatter_by_class(ax: plt.Axes, Z: np.ndarray, y: np.ndarray) -> None:
-    """Draw one embedding with a stable class palette."""
     for species in CLASS_ORDER:
         mask = y == species
         ax.scatter(
@@ -270,7 +252,6 @@ def plot_embeddings(
     manifold_result: EmbeddingResult,
     output_path: Path,
 ) -> None:
-    """Save side-by-side PCA and manifold projections."""
     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
     items = [
         (axes[0], Z_pca, pca_result),
@@ -294,7 +275,6 @@ def plot_diagnostics(
     metrics_df: pd.DataFrame,
     output_path: Path,
 ) -> None:
-    """Save cumulative variance and execution-time diagnostics."""
     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
     components = np.arange(1, len(cumulative_variance) + 1)
 
@@ -328,7 +308,6 @@ def save_embeddings(
     manifold_name: str,
     output_path: Path,
 ) -> None:
-    """Save training embeddings for later clustering or reporting."""
     out = df[["recording_id", "species_id", "songtype_id", "is_tp"]].copy()
     out["pca_1"] = Z_pca[:, 0]
     out["pca_2"] = Z_pca[:, 1]
@@ -344,7 +323,6 @@ def save_test_pca(
     pca_2d: PCA,
     output_path: Path,
 ) -> None:
-    """Project test observations with the PCA fitted on training data."""
     Z_test_pca = pca_2d.transform(X_test_scaled)
     out = test_df[["recording_id", "species_id", "songtype_id", "is_tp"]].copy()
     out["pca_1"] = Z_test_pca[:, 0]
@@ -353,7 +331,6 @@ def save_test_pca(
 
 
 def run_phase1(args: argparse.Namespace) -> dict:
-    """Execute the full Phase 1 workflow."""
     configure_plots(font_size=args.font_size)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -445,7 +422,6 @@ def run_phase1(args: argparse.Namespace) -> dict:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Run Phase 1 dimensionality reduction.")
     parser.add_argument("--train", default="eco_acoustic_train.csv")
     parser.add_argument("--test", default="eco_acoustic_test.csv")
@@ -459,7 +435,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """CLI entry point."""
     summary = run_phase1(parse_args())
     metrics = pd.read_csv(summary["outputs"]["metrics"])
     print_key_values(
