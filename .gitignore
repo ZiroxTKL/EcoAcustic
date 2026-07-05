@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+
+# Optional trained model artifacts can be large.
+*.joblib
+*.keras
+
+# Local LaTeX build files.
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz

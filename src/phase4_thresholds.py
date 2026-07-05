@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from project_utils import CLASS_ORDER, configure_plots, write_text
+from project_utils import CLASS_ORDER, configure_plots, print_key_values, print_table
 
 
 ZONE_CONFIDENCE = "Zona de Confianza"
@@ -19,13 +18,13 @@ ZONE_REJECTION = "Zona de Rechazo"
 ZONE_ORDER = [ZONE_CONFIDENCE, ZONE_UNCERTAINTY, ZONE_REJECTION]
 
 
-def resolve_model_prefix(model: str, summary_path: Path) -> str:
+def resolve_model_prefix(model: str, metrics_path: Path) -> str:
     """Resolve the probability-column prefix to use."""
     if model in {"mlp", "ensemble"}:
         return model
 
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    best_model = summary["best_model_by_test_f1_weighted"]
+    metrics = pd.read_csv(metrics_path)
+    best_model = metrics.sort_values("f1_weighted", ascending=False).iloc[0]["model"]
     return "ensemble" if "Ensemble" in best_model else "mlp"
 
 
@@ -130,57 +129,13 @@ def plot_threshold_summary(
     plt.close(fig)
 
 
-def format_latex_float(value: float) -> str:
-    """Format a nullable float for LaTeX."""
-    if pd.isna(value):
-        return "N/A"
-    return f"{value:.3f}"
-
-
-def write_phase4_latex(
-    output_path: Path,
-    prefix: str,
-    confidence: float,
-    rejection: float,
-    zone_summary: pd.DataFrame,
-) -> None:
-    """Write the Phase 4 LaTeX analysis."""
-    rows = []
-    for _, row in zone_summary.iterrows():
-        rows.append(
-            f"{row['decision_zone']} & {int(row['n_observations'])} & "
-            f"{row['coverage']:.3f} & {format_latex_float(row['accuracy'])} & "
-            f"{format_latex_float(row['mean_probability'])} \\\\"
-        )
-
-    model_name = "MLP TensorFlow" if prefix == "mlp" else "Soft Voting Ensemble"
-    content = rf"""\subsection{{MLOps y l\'ogica de umbrales}}
-Se propuso una pol\'itica operacional basada en la probabilidad posterior m\'axima del modelo {model_name}. Las predicciones con $P \geq {confidence:.2f}$ fueron asignadas a la zona de confianza, las predicciones con ${rejection:.2f} \leq P < {confidence:.2f}$ fueron asignadas a la zona de incertidumbre y las predicciones con $P < {rejection:.2f}$ fueron asignadas a la zona de rechazo.
-
-\begin{{table}}[H]
-\centering
-\caption{{Resumen operativo de zonas de decisi\'on.}}
-\begin{{tabular}}{{lrrrr}}
-\hline
-Zona & Observaciones & Cobertura & Accuracy & Prob. media \\
-\hline
-{chr(10).join(rows)}
-\hline
-\end{{tabular}}
-\end{{table}}
-
-La zona de confianza fue definida para automatizar decisiones de clasificaci\'on con alta certeza. La zona de incertidumbre fue destinada a revisi\'on humana o validaci\'on secundaria, mientras que la zona de rechazo fue reservada para casos donde no deber\'ia emitirse una clasificaci\'on autom\'atica. Esta l\'ogica permite controlar el riesgo operativo al separar cobertura del sistema y confiabilidad de las decisiones aceptadas.
-"""
-    write_text(output_path, content)
-
-
 def run_phase4(args: argparse.Namespace) -> dict:
     """Execute the threshold policy workflow."""
     configure_plots(args.font_size)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    prefix = resolve_model_prefix(args.model, Path(args.phase3_summary))
+    prefix = resolve_model_prefix(args.model, Path(args.phase3_metrics))
     predictions = pd.read_csv(args.predictions)
     thresholded = apply_threshold_policy(
         predictions,
@@ -201,14 +156,6 @@ def run_phase4(args: argparse.Namespace) -> dict:
         args.rejection_threshold,
         output_dir / "phase4_threshold_diagnostics.png",
     )
-    write_phase4_latex(
-        Path(args.report_path),
-        prefix,
-        args.confidence_threshold,
-        args.rejection_threshold,
-        zone_summary,
-    )
-
     summary = {
         "selected_model_prefix": prefix,
         "confidence_threshold": args.confidence_threshold,
@@ -221,10 +168,16 @@ def run_phase4(args: argparse.Namespace) -> dict:
             "zone_summary": str(output_dir / "phase4_zone_summary.csv"),
             "species_summary": str(output_dir / "phase4_species_zone_summary.csv"),
             "diagnostics_plot": str(output_dir / "phase4_threshold_diagnostics.png"),
-            "latex_report": args.report_path,
+            "summary": str(output_dir / "phase4_summary.csv"),
         },
     }
-    write_text(output_dir / "phase4_summary.json", json.dumps(summary, indent=2))
+    pd.DataFrame(
+        [
+            {"field": "selected_model_prefix", "value": prefix},
+            {"field": "confidence_threshold", "value": args.confidence_threshold},
+            {"field": "rejection_threshold", "value": args.rejection_threshold},
+        ]
+    ).to_csv(output_dir / "phase4_summary.csv", index=False)
     return summary
 
 
@@ -232,9 +185,8 @@ def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Run Phase 4 threshold policy.")
     parser.add_argument("--predictions", default="outputs/phase3/phase3_test_predictions.csv")
-    parser.add_argument("--phase3-summary", default="outputs/phase3/phase3_summary.json")
+    parser.add_argument("--phase3-metrics", default="outputs/phase3/phase3_model_metrics.csv")
     parser.add_argument("--output-dir", default="outputs/phase4")
-    parser.add_argument("--report-path", default="report/phase4_analysis.tex")
     parser.add_argument("--model", choices=["best", "mlp", "ensemble"], default="best")
     parser.add_argument("--confidence-threshold", type=float, default=0.85)
     parser.add_argument("--rejection-threshold", type=float, default=0.40)
@@ -245,7 +197,16 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """CLI entry point."""
     summary = run_phase4(parse_args())
-    print(json.dumps(summary, indent=2))
+    print_key_values(
+        "FASE 4 - RESUMEN",
+        {
+            "Modelo usado": summary["selected_model_prefix"],
+            "Umbral confianza": summary["confidence_threshold"],
+            "Umbral rechazo": summary["rejection_threshold"],
+        },
+    )
+    print_table("FASE 4 - ZONAS OPERATIVAS", summary["zone_summary"])
+    print_key_values("FASE 4 - ARCHIVOS GENERADOS", summary["outputs"])
 
 
 if __name__ == "__main__":

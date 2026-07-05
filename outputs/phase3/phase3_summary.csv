@@ -1,0 +1,4 @@
+field,value
+validation_size,0.2
+epochs_trained,69
+best_model_by_test_f1_weighted,Soft Voting Ensemble

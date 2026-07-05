@@ -8,7 +8,6 @@ execution-time measurement, and distance-preservation diagnostics.
 from __future__ import annotations
 
 import argparse
-import json
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -19,6 +18,8 @@ import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE, trustworthiness
 from sklearn.preprocessing import StandardScaler
+
+from project_utils import print_key_values, print_table
 
 
 TARGET_COLUMN = "species_id"
@@ -351,54 +352,6 @@ def save_test_pca(
     out.to_csv(output_path, index=False)
 
 
-def latex_float(value: float | None, digits: int = 3) -> str:
-    """Format values for LaTeX tables."""
-    if value is None or pd.isna(value):
-        return "N/A"
-    return f"{value:.{digits}f}"
-
-
-def write_latex_report(
-    output_path: Path,
-    train_shape: tuple[int, int],
-    test_shape: tuple[int, int],
-    k95: int,
-    pca_result: EmbeddingResult,
-    manifold_result: EmbeddingResult,
-) -> None:
-    """Write an academic, impersonal LaTeX snippet for Phase 1."""
-    table_rows = []
-    for result in [pca_result, manifold_result]:
-        variance = latex_float(result.variance_retained_2d, 3)
-        row = (
-            f"{result.method} & {result.elapsed_seconds:.3f} & "
-            f"{variance} & {result.trustworthiness_10:.3f} & "
-            f"{result.distance_correlation:.3f} \\\\"
-        )
-        table_rows.append(row)
-
-    content = rf"""\subsection{{Reducci\'on de dimensionalidad}}
-Se analizaron {train_shape[0]} observaciones de entrenamiento y {test_shape[0]} observaciones de prueba, descritas por 64 coeficientes MFCC continuos. Antes de aplicar los m\'etodos de reducci\'on de dimensionalidad, se estandarizaron las variables \texttt{{mel\_0}}--\texttt{{mel\_63}} mediante media cero y varianza unitaria. Esta etapa fue requerida debido a que PCA, t-SNE y UMAP son sensibles a la escala de entrada.
-
-Se ajust\'o PCA completo sobre el conjunto de entrenamiento con el objetivo de estimar la varianza acumulada por componente principal. El umbral de 95\% de varianza acumulada fue alcanzado con {k95} componentes. Posteriormente, se calcul\'o una proyecci\'on PCA en dos dimensiones para compararla contra una t\'ecnica de variedades no lineal. En esta ejecuci\'on, la comparaci\'on se realiz\'o con {manifold_result.method}, siguiendo una inicializaci\'on basada en PCA cuando el algoritmo lo permiti\'o.
-
-\begin{{table}}[H]
-\centering
-\caption{{Comparaci\'on cuantitativa de m\'etodos de reducci\'on de dimensionalidad.}}
-\begin{{tabular}}{{lrrrr}}
-\hline
-M\'etodo & Tiempo (s) & Varianza 2D & Trustworthiness@10 & Corr. distancias \\
-\hline
-{chr(10).join(table_rows)}
-\hline
-\end{{tabular}}
-\end{{table}}
-
-Se observ\'o que PCA proporcion\'o una referencia lineal interpretable mediante varianza explicada y error de reconstrucci\'on, mientras que la t\'ecnica de variedades fue evaluada mediante preservaci\'on local y correlaci\'on de distancias, ya que no dispone de una raz\'on de varianza explicada equivalente. La separaci\'on visual por \texttt{{species\_id}} fue inspeccionada en el plano bidimensional para identificar posibles agrupamientos naturales entre las cinco clases.
-"""
-    output_path.write_text(content, encoding="utf-8")
-
-
 def run_phase1(args: argparse.Namespace) -> dict:
     """Execute the full Phase 1 workflow."""
     configure_plots(font_size=args.font_size)
@@ -430,8 +383,6 @@ def run_phase1(args: argparse.Namespace) -> dict:
 
     metrics_df = pd.DataFrame([asdict(pca_result), asdict(manifold_result)])
     metrics_df.to_csv(output_dir / "phase1_metrics.csv", index=False)
-    metrics_df.to_json(output_dir / "phase1_metrics.json", orient="records", indent=2)
-
     variance_df = pd.DataFrame(
         {
             "component": np.arange(1, len(cumulative_variance) + 1),
@@ -465,17 +416,6 @@ def run_phase1(args: argparse.Namespace) -> dict:
         output_dir / "phase1_diagnostics.png",
     )
 
-    report_path = Path(args.report_path)
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    write_latex_report(
-        report_path,
-        train_shape=train_df.shape,
-        test_shape=test_df.shape,
-        k95=k95,
-        pca_result=pca_result,
-        manifold_result=manifold_result,
-    )
-
     summary = {
         "train_rows": int(train_df.shape[0]),
         "test_rows": int(test_df.shape[0]),
@@ -489,12 +429,18 @@ def run_phase1(args: argparse.Namespace) -> dict:
             "test_pca": str(output_dir / "phase1_test_pca.csv"),
             "embedding_plot": str(output_dir / "phase1_embeddings.png"),
             "diagnostics_plot": str(output_dir / "phase1_diagnostics.png"),
-            "latex_report": str(report_path),
+            "summary": str(output_dir / "phase1_summary.csv"),
         },
     }
-    (output_dir / "phase1_summary.json").write_text(
-        json.dumps(summary, indent=2), encoding="utf-8"
-    )
+    pd.DataFrame(
+        [
+            {"field": "train_rows", "value": summary["train_rows"]},
+            {"field": "test_rows", "value": summary["test_rows"]},
+            {"field": "n_features", "value": summary["n_features"]},
+            {"field": "classes", "value": ", ".join(map(str, summary["classes"]))},
+            {"field": "pca_k95", "value": summary["pca_k95"]},
+        ]
+    ).to_csv(output_dir / "phase1_summary.csv", index=False)
     return summary
 
 
@@ -504,7 +450,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train", default="eco_acoustic_train.csv")
     parser.add_argument("--test", default="eco_acoustic_test.csv")
     parser.add_argument("--output-dir", default="outputs/phase1")
-    parser.add_argument("--report-path", default="report/phase1_analysis.tex")
     parser.add_argument("--manifold", choices=["tsne", "umap"], default="tsne")
     parser.add_argument("--perplexity", type=float, default=30.0)
     parser.add_argument("--n-pairs", type=int, default=50000)
@@ -516,7 +461,19 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """CLI entry point."""
     summary = run_phase1(parse_args())
-    print(json.dumps(summary, indent=2))
+    metrics = pd.read_csv(summary["outputs"]["metrics"])
+    print_key_values(
+        "FASE 1 - RESUMEN",
+        {
+            "Observaciones train": summary["train_rows"],
+            "Observaciones test": summary["test_rows"],
+            "Features MFCC": summary["n_features"],
+            "Clases": ", ".join(map(str, summary["classes"])),
+            "Componentes PCA para 95%": summary["pca_k95"],
+        },
+    )
+    print_table("FASE 1 - METRICAS", metrics.to_dict(orient="records"))
+    print_key_values("FASE 1 - ARCHIVOS GENERADOS", summary["outputs"])
 
 
 if __name__ == "__main__":

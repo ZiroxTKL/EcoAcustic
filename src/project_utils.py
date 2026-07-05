@@ -81,3 +81,45 @@ def write_text(path: str | Path, content: str) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def _format_cell(value: object) -> str:
+    """Format a scalar value for compact console tables."""
+    if pd.isna(value):
+        return "N/A"
+    if isinstance(value, float):
+        return f"{value:.4f}"
+    return str(value)
+
+
+def print_table(title: str, rows: list[dict], columns: list[str] | None = None) -> None:
+    """Print a lightweight ASCII table without extra dependencies."""
+    print(f"\n{title}")
+    if not rows:
+        print("(sin filas)")
+        return
+
+    columns = columns or list(rows[0].keys())
+    formatted = [
+        {col: _format_cell(row.get(col, "")) for col in columns}
+        for row in rows
+    ]
+    widths = {
+        col: max(len(col), *(len(row[col]) for row in formatted))
+        for col in columns
+    }
+    line = "+-" + "-+-".join("-" * widths[col] for col in columns) + "-+"
+    header = "| " + " | ".join(col.ljust(widths[col]) for col in columns) + " |"
+
+    print(line)
+    print(header)
+    print(line)
+    for row in formatted:
+        print("| " + " | ".join(row[col].ljust(widths[col]) for col in columns) + " |")
+    print(line)
+
+
+def print_key_values(title: str, values: dict[str, object]) -> None:
+    """Print key-value pairs as a two-column table."""
+    rows = [{"Campo": key, "Valor": value} for key, value in values.items()]
+    print_table(title, rows, columns=["Campo", "Valor"])

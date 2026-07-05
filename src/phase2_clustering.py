@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -13,13 +12,15 @@ import numpy as np
 import pandas as pd
 from sklearn.cluster import DBSCAN
 from sklearn.decomposition import PCA
-from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
+from sklearn.metrics import adjusted_rand_score, calinski_harabasz_score
+from sklearn.metrics import davies_bouldin_score, normalized_mutual_info_score
 from sklearn.metrics import silhouette_score
 from sklearn.mixture import GaussianMixture
 from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
 
-from project_utils import CLASS_ORDER, configure_plots, load_project_csv, write_text
+from project_utils import configure_plots, load_project_csv, print_key_values
+from project_utils import print_table
 
 
 @dataclass
@@ -30,6 +31,8 @@ class ClusteringSelection:
     silhouette: float
     noise_fraction: float
     elapsed_seconds: float
+    davies_bouldin: float
+    calinski_harabasz: float
     adjusted_rand: float
     normalized_mutual_info: float
 
@@ -57,6 +60,23 @@ def valid_silhouette(X: np.ndarray, labels: np.ndarray, ignore_noise: bool) -> f
     return float(silhouette_score(X, labels))
 
 
+def internal_scores(
+    X: np.ndarray,
+    labels: np.ndarray,
+    ignore_noise: bool,
+) -> tuple[float, float]:
+    """Compute Davies-Bouldin and Calinski-Harabasz when valid."""
+    if ignore_noise:
+        mask = labels != -1
+        X = X[mask]
+        labels = labels[mask]
+
+    unique = np.unique(labels)
+    if len(unique) < 2 or len(unique) >= len(labels):
+        return float("nan"), float("nan")
+    return float(davies_bouldin_score(X, labels)), float(calinski_harabasz_score(X, labels))
+
+
 def evaluate_gmm_grid(
     Z: np.ndarray,
     y_true: np.ndarray,
@@ -80,6 +100,7 @@ def evaluate_gmm_grid(
         labels = gmm.fit_predict(Z)
         elapsed = time.perf_counter() - start
         sil = valid_silhouette(Z, labels, ignore_noise=False)
+        dbi, ch = internal_scores(Z, labels, ignore_noise=False)
         ari = adjusted_rand_score(y_true, labels)
         nmi = normalized_mutual_info_score(y_true, labels)
 
@@ -88,6 +109,8 @@ def evaluate_gmm_grid(
                 "method": "GMM",
                 "k": k,
                 "silhouette": sil,
+                "davies_bouldin": dbi,
+                "calinski_harabasz": ch,
                 "bic": gmm.bic(Z),
                 "aic": gmm.aic(Z),
                 "elapsed_seconds": elapsed,
@@ -104,6 +127,8 @@ def evaluate_gmm_grid(
                 silhouette=sil,
                 noise_fraction=0.0,
                 elapsed_seconds=elapsed,
+                davies_bouldin=dbi,
+                calinski_harabasz=ch,
                 adjusted_rand=ari,
                 normalized_mutual_info=nmi,
             )
@@ -141,6 +166,7 @@ def evaluate_dbscan_grid(
         n_clusters = len(cluster_labels)
         noise_fraction = float(np.mean(labels == -1))
         sil = valid_silhouette(Z, labels, ignore_noise=True)
+        dbi, ch = internal_scores(Z, labels, ignore_noise=True)
         ari = adjusted_rand_score(y_true, labels)
         nmi = normalized_mutual_info_score(y_true, labels)
 
@@ -152,6 +178,8 @@ def evaluate_dbscan_grid(
                 "n_clusters": n_clusters,
                 "noise_fraction": noise_fraction,
                 "silhouette": sil,
+                "davies_bouldin": dbi,
+                "calinski_harabasz": ch,
                 "elapsed_seconds": elapsed,
                 "adjusted_rand": ari,
                 "normalized_mutual_info": nmi,
@@ -167,6 +195,8 @@ def evaluate_dbscan_grid(
                 silhouette=sil,
                 noise_fraction=noise_fraction,
                 elapsed_seconds=elapsed,
+                davies_bouldin=dbi,
+                calinski_harabasz=ch,
                 adjusted_rand=ari,
                 normalized_mutual_info=nmi,
             )
@@ -183,6 +213,8 @@ def evaluate_dbscan_grid(
             silhouette=float(row["silhouette"]),
             noise_fraction=float(row["noise_fraction"]),
             elapsed_seconds=float(row["elapsed_seconds"]),
+            davies_bouldin=float(row["davies_bouldin"]),
+            calinski_harabasz=float(row["calinski_harabasz"]),
             adjusted_rand=float(row["adjusted_rand"]),
             normalized_mutual_info=float(row["normalized_mutual_info"]),
         )
@@ -244,36 +276,6 @@ def plot_cluster_assignments(
     plt.close(fig)
 
 
-def write_phase2_latex(
-    output_path: Path,
-    n_components: int,
-    gmm_best: ClusteringSelection,
-    dbscan_best: ClusteringSelection,
-) -> None:
-    """Write the Phase 2 LaTeX analysis."""
-    content = rf"""\subsection{{Clustering no supervisado}}
-Se aplicaron dos paradigmas de clustering sobre la representaci\'on PCA que conserv\'o el 95\% de la varianza acumulada. Esta elecci\'on redujo el espacio original de 64 coeficientes MFCC a {n_components} componentes, con lo cual se mitig\'o el efecto de dimensionalidad alta antes de estimar agrupamientos no supervisados.
-
-Para GMM, se evaluaron valores de $k$ en una grilla discreta y se seleccion\'o el n\'umero de componentes que maximiz\'o el coeficiente de Silhouette. Para DBSCAN, se construy\'o una grilla de $\varepsilon$ a partir de distancias al $k$-\'esimo vecino y se seleccion\'o el radio con mayor Silhouette v\'alida sobre puntos no etiquetados como ruido.
-
-\begin{{table}}[H]
-\centering
-\caption{{Selecci\'on de modelos de clustering mediante Silhouette.}}
-\begin{{tabular}}{{lrrrrr}}
-\hline
-M\'etodo & Par\'ametro & Clusters & Silhouette & Ruido & ARI \\
-\hline
-GMM & {gmm_best.selected_parameter} & {gmm_best.n_clusters} & {gmm_best.silhouette:.3f} & {gmm_best.noise_fraction:.3f} & {gmm_best.adjusted_rand:.3f} \\
-DBSCAN & {dbscan_best.selected_parameter} & {dbscan_best.n_clusters} & {dbscan_best.silhouette:.3f} & {dbscan_best.noise_fraction:.3f} & {dbscan_best.adjusted_rand:.3f} \\
-\hline
-\end{{tabular}}
-\end{{table}}
-
-El coeficiente de Silhouette fue empleado como criterio geom\'etrico porque compara la cohesi\'on intra-cluster con la separaci\'on inter-cluster mediante $(b-a)/\max(a,b)$. Por tanto, valores m\'as cercanos a uno indicaron particiones con menor solapamiento relativo. El ARI se report\'o solo como diagn\'ostico externo, ya que las etiquetas \texttt{{species\_id}} no fueron utilizadas para ajustar los modelos de clustering.
-"""
-    write_text(output_path, content)
-
-
 def run_phase2(args: argparse.Namespace) -> dict:
     """Execute the Phase 2 clustering workflow."""
     configure_plots(args.font_size)
@@ -310,13 +312,6 @@ def run_phase2(args: argparse.Namespace) -> dict:
         Z2, y, gmm_labels, dbscan_labels, output_dir / "phase2_clusters_pca2d.png"
     )
 
-    write_phase2_latex(
-        Path(args.report_path),
-        n_components=n_components,
-        gmm_best=gmm_best,
-        dbscan_best=dbscan_best,
-    )
-
     summary = {
         "pca_components_95": n_components,
         "selected_models": [asdict(gmm_best), asdict(dbscan_best)],
@@ -327,10 +322,12 @@ def run_phase2(args: argparse.Namespace) -> dict:
             "assignments": str(output_dir / "phase2_cluster_assignments.csv"),
             "silhouette_plot": str(output_dir / "phase2_silhouette_selection.png"),
             "clusters_plot": str(output_dir / "phase2_clusters_pca2d.png"),
-            "latex_report": args.report_path,
+            "summary": str(output_dir / "phase2_summary.csv"),
         },
     }
-    write_text(output_dir / "phase2_summary.json", json.dumps(summary, indent=2))
+    pd.DataFrame(
+        [{"field": "pca_components_95", "value": n_components}]
+    ).to_csv(output_dir / "phase2_summary.csv", index=False)
     return summary
 
 
@@ -339,7 +336,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Phase 2 clustering.")
     parser.add_argument("--train", default="eco_acoustic_train.csv")
     parser.add_argument("--output-dir", default="outputs/phase2")
-    parser.add_argument("--report-path", default="report/phase2_analysis.tex")
     parser.add_argument("--pca-threshold", type=float, default=0.95)
     parser.add_argument("--k-min", type=int, default=2)
     parser.add_argument("--k-max", type=int, default=10)
@@ -353,7 +349,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """CLI entry point."""
     summary = run_phase2(parse_args())
-    print(json.dumps(summary, indent=2))
+    print_key_values(
+        "FASE 2 - RESUMEN",
+        {"Componentes PCA 95%": summary["pca_components_95"]},
+    )
+    print_table("FASE 2 - MODELOS SELECCIONADOS", summary["selected_models"])
+    print_key_values("FASE 2 - ARCHIVOS GENERADOS", summary["outputs"])
 
 
 if __name__ == "__main__":

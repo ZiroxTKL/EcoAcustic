@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import time
 from pathlib import Path
@@ -26,7 +25,7 @@ from tensorflow import keras
 from tensorflow.keras import layers, regularizers
 
 from project_utils import CLASS_ORDER, configure_plots, encode_labels
-from project_utils import load_project_csv, write_text
+from project_utils import load_project_csv, print_key_values, print_table
 
 
 class WeightedF1Callback(keras.callbacks.Callback):
@@ -72,6 +71,31 @@ def build_mlp(input_dim: int, n_classes: int, learning_rate: float) -> keras.Mod
 
     outputs = layers.Dense(n_classes, activation="softmax")(x)
     model = keras.Model(inputs=inputs, outputs=outputs, name="eco_acoustic_mlp")
+    model.compile(
+        optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"],
+    )
+    return model
+
+
+def build_mlp_dropout_before_bn(
+    input_dim: int,
+    n_classes: int,
+    learning_rate: float,
+) -> keras.Model:
+    """Build a variant with Dropout before Batch Normalization."""
+    inputs = keras.Input(shape=(input_dim,), name="mfcc_input")
+    x = layers.Dense(128, activation="relu", kernel_regularizer=regularizers.l2(1e-4))(inputs)
+    x = layers.Dropout(0.30)(x)
+    x = layers.BatchNormalization()(x)
+
+    x = layers.Dense(64, activation="relu", kernel_regularizer=regularizers.l2(1e-4))(x)
+    x = layers.Dropout(0.20)(x)
+    x = layers.BatchNormalization()(x)
+
+    outputs = layers.Dense(n_classes, activation="softmax")(x)
+    model = keras.Model(inputs=inputs, outputs=outputs, name="mlp_dropout_before_bn")
     model.compile(
         optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
         loss="sparse_categorical_crossentropy",
@@ -130,6 +154,61 @@ def train_mlp(
     history_df["train_f1_weighted"] = f1_callback.train_f1[: len(history_df)]
     history_df["val_f1_weighted"] = f1_callback.val_f1[: len(history_df)]
     return model, history_df, elapsed
+
+
+def run_regularization_ablation(
+    main_history: pd.DataFrame,
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    args: argparse.Namespace,
+) -> pd.DataFrame:
+    """Compare BatchNorm-before-Dropout against Dropout-before-BatchNorm."""
+    rows = [
+        {
+            "variant": "BatchNorm -> ReLU -> Dropout",
+            "epochs": int(len(main_history)),
+            "best_val_loss": float(main_history["val_loss"].min()),
+            "best_val_accuracy": float(main_history["val_accuracy"].max()),
+            "best_val_f1_weighted": float(main_history["val_f1_weighted"].max()),
+            "elapsed_seconds": np.nan,
+        }
+    ]
+
+    model = build_mlp_dropout_before_bn(
+        X_train.shape[1], len(CLASS_ORDER), args.learning_rate
+    )
+    start = time.perf_counter()
+    history = model.fit(
+        X_train,
+        y_train,
+        validation_data=(X_val, y_val),
+        epochs=args.ablation_epochs,
+        batch_size=args.batch_size,
+        callbacks=[
+            keras.callbacks.EarlyStopping(
+                monitor="val_loss",
+                patience=args.ablation_patience,
+                restore_best_weights=True,
+            )
+        ],
+        verbose=0,
+    )
+    elapsed = time.perf_counter() - start
+    val_pred = np.argmax(model.predict(X_val, verbose=0), axis=1)
+
+    rows.append(
+        {
+            "variant": "Dropout -> BatchNorm",
+            "epochs": int(len(history.history["loss"])),
+            "best_val_loss": float(np.min(history.history["val_loss"])),
+            "best_val_accuracy": float(np.max(history.history["val_accuracy"])),
+            "best_val_f1_weighted": float(f1_score(y_val, val_pred, average="weighted")),
+            "elapsed_seconds": elapsed,
+        }
+    )
+    return pd.DataFrame(rows)
 
 
 def train_tree_ensemble(
@@ -318,54 +397,25 @@ def save_prediction_table(
     out.to_csv(output_path, index=False)
 
 
-def write_phase3_latex(
-    output_path: Path,
-    mlp_metrics: dict,
-    ensemble_metrics: dict,
-    ensemble_validation: pd.DataFrame,
-    epochs_trained: int,
-) -> None:
-    """Write the Phase 3 LaTeX analysis."""
-    val_rows = []
-    for _, row in ensemble_validation.iterrows():
-        val_rows.append(
-            f"{row['model']} & {row['val_f1_weighted']:.3f} & "
-            f"{row['elapsed_seconds']:.3f} \\\\"
-        )
-
-    content = rf"""\subsection{{Clasificaci\'on supervisada}}
-Se entrenaron dos modelos supervisados sobre los 64 coeficientes MFCC estandarizados. El primer modelo correspondi\'o a una red MLP implementada en TensorFlow/Keras con topolog\'ia $64 \rightarrow 128 \rightarrow 64 \rightarrow 5$. En las capas ocultas se aplicaron Batch Normalization, activaci\'on ReLU y Dropout con tasas 0.30 y 0.20, respectivamente. La funci\'on de p\'erdida utilizada fue entrop\'ia cruzada categ\'orica dispersa, optimizada mediante Adam.
-
-El segundo modelo correspondi\'o a un ensamble por votaci\'on suave compuesto por Random Forest, Extra Trees e HistGradientBoosting. Se utilizaron probabilidades posteriores estimadas por cada componente y se agregaron mediante votaci\'on probabil\'istica. La red neuronal fue entrenada durante {epochs_trained} \'epocas efectivas con parada temprana.
-
-\begin{{table}}[H]
-\centering
-\caption{{Desempe\~no de componentes del ensamble en validaci\'on.}}
-\begin{{tabular}}{{lrr}}
-\hline
-Modelo & F1 ponderado validaci\'on & Tiempo (s) \\
-\hline
-{chr(10).join(val_rows)}
-\hline
-\end{{tabular}}
-\end{{table}}
-
-\begin{{table}}[H]
-\centering
-\caption{{Comparaci\'on de clasificadores sobre el conjunto de prueba.}}
-\begin{{tabular}}{{lrrr}}
-\hline
-Modelo & Accuracy & F1 macro & F1 ponderado \\
-\hline
-MLP TensorFlow & {mlp_metrics['accuracy']:.3f} & {mlp_metrics['f1_macro']:.3f} & {mlp_metrics['f1_weighted']:.3f} \\
-Soft Voting Ensemble & {ensemble_metrics['accuracy']:.3f} & {ensemble_metrics['f1_macro']:.3f} & {ensemble_metrics['f1_weighted']:.3f} \\
-\hline
-\end{{tabular}}
-\end{{table}}
-
-El F1-score fue priorizado porque el problema contiene cinco especies y la distribuci\'on de clases puede inducir diferencias entre desempe\~no global y desempe\~no por clase. Las matrices de confusi\'on permitieron inspeccionar errores de asignaci\'on entre especies ac\'usticamente cercanas, mientras que las curvas de aprendizaje permitieron controlar el sobreajuste asociado a la red neuronal.
-"""
-    write_text(output_path, content)
+def classification_reports_to_csv(reports: dict, output_path: Path) -> None:
+    """Save sklearn classification reports in long CSV format."""
+    rows = []
+    for model_name, report in reports.items():
+        for label, metrics in report.items():
+            if isinstance(metrics, dict):
+                row = {"model": model_name, "label": label}
+                row.update(metrics)
+            else:
+                row = {
+                    "model": model_name,
+                    "label": label,
+                    "precision": np.nan,
+                    "recall": np.nan,
+                    "f1-score": metrics,
+                    "support": np.nan,
+                }
+            rows.append(row)
+    pd.DataFrame(rows).to_csv(output_path, index=False)
 
 
 def run_phase3(args: argparse.Namespace) -> dict:
@@ -395,6 +445,9 @@ def run_phase3(args: argparse.Namespace) -> dict:
     mlp, history_df, mlp_elapsed = train_mlp(
         X_train_scaled, y_train, X_val_scaled, y_val, args
     )
+    ablation_df = run_regularization_ablation(
+        history_df, X_train_scaled, y_train, X_val_scaled, y_val, args
+    )
     ensemble, ensemble_validation_df, ensemble_elapsed = train_tree_ensemble(
         X_train_scaled, y_train, X_val_scaled, y_val, args.random_state
     )
@@ -414,13 +467,17 @@ def run_phase3(args: argparse.Namespace) -> dict:
     )
     metrics_df.to_csv(output_dir / "phase3_model_metrics.csv", index=False)
     history_df.to_csv(output_dir / "phase3_mlp_history.csv", index=False)
+    ablation_df.to_csv(output_dir / "phase3_regularization_ablation.csv", index=False)
     ensemble_validation_df.to_csv(output_dir / "phase3_ensemble_validation.csv", index=False)
 
     reports = {
         "MLP": mlp_metrics["classification_report"],
         "Soft Voting Ensemble": ensemble_metrics["classification_report"],
     }
-    write_text(output_dir / "phase3_classification_reports.json", json.dumps(reports, indent=2))
+    classification_reports_to_csv(
+        reports,
+        output_dir / "phase3_classification_reports.csv",
+    )
 
     save_prediction_table(
         test_df,
@@ -446,14 +503,6 @@ def run_phase3(args: argparse.Namespace) -> dict:
         )
         joblib.dump(scaler, output_dir / "phase3_standard_scaler.joblib")
 
-    write_phase3_latex(
-        Path(args.report_path),
-        mlp_metrics,
-        ensemble_metrics,
-        ensemble_validation_df,
-        epochs_trained=len(history_df),
-    )
-
     best_model = (
         "MLP"
         if mlp_metrics["f1_weighted"] >= ensemble_metrics["f1_weighted"]
@@ -467,14 +516,26 @@ def run_phase3(args: argparse.Namespace) -> dict:
         "outputs": {
             "metrics": str(output_dir / "phase3_model_metrics.csv"),
             "history": str(output_dir / "phase3_mlp_history.csv"),
+            "regularization_ablation": str(
+                output_dir / "phase3_regularization_ablation.csv"
+            ),
             "ensemble_validation": str(output_dir / "phase3_ensemble_validation.csv"),
+            "classification_reports": str(
+                output_dir / "phase3_classification_reports.csv"
+            ),
             "predictions": str(output_dir / "phase3_test_predictions.csv"),
             "learning_curves": str(output_dir / "phase3_mlp_learning_curves.png"),
             "confusion_matrices": str(output_dir / "phase3_confusion_matrices.png"),
-            "latex_report": args.report_path,
+            "summary": str(output_dir / "phase3_summary.csv"),
         },
     }
-    write_text(output_dir / "phase3_summary.json", json.dumps(summary, indent=2))
+    pd.DataFrame(
+        [
+            {"field": "validation_size", "value": args.validation_size},
+            {"field": "epochs_trained", "value": int(len(history_df))},
+            {"field": "best_model_by_test_f1_weighted", "value": best_model},
+        ]
+    ).to_csv(output_dir / "phase3_summary.csv", index=False)
     return summary
 
 
@@ -484,7 +545,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train", default="eco_acoustic_train.csv")
     parser.add_argument("--test", default="eco_acoustic_test.csv")
     parser.add_argument("--output-dir", default="outputs/phase3")
-    parser.add_argument("--report-path", default="report/phase3_analysis.tex")
     parser.add_argument("--validation-size", type=float, default=0.20)
     parser.add_argument("--epochs", type=int, default=250)
     parser.add_argument("--batch-size", type=int, default=64)
@@ -493,13 +553,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--font-size", type=int, default=14)
     parser.add_argument("--save-models", action="store_true")
+    parser.add_argument("--ablation-epochs", type=int, default=80)
+    parser.add_argument("--ablation-patience", type=int, default=12)
     return parser.parse_args()
 
 
 def main() -> None:
     """CLI entry point."""
     summary = run_phase3(parse_args())
-    print(json.dumps(summary, indent=2))
+    print_key_values(
+        "FASE 3 - RESUMEN",
+        {
+            "Tamano validacion": summary["validation_size"],
+            "Epocas MLP entrenadas": summary["epochs_trained"],
+            "Mejor modelo por F1 test": summary["best_model_by_test_f1_weighted"],
+        },
+    )
+    print_table("FASE 3 - METRICAS EN TEST", summary["metrics"])
+    ablation = pd.read_csv(summary["outputs"]["regularization_ablation"])
+    print_table(
+        "FASE 3 - ABLACION DE REGULARIZACION",
+        ablation.to_dict(orient="records"),
+    )
+    validation = pd.read_csv(summary["outputs"]["ensemble_validation"])
+    print_table("FASE 3 - ENSAMBLE EN VALIDACION", validation.to_dict(orient="records"))
+    print_key_values("FASE 3 - ARCHIVOS GENERADOS", summary["outputs"])
 
 
 if __name__ == "__main__":
